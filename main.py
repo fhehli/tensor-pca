@@ -1,70 +1,122 @@
-from warnings import simplefilter
+from functools import partial
 
 import numpy as np
 from numpy.linalg import norm
 from tqdm import tqdm
 
-from utils import sample_sphere, sample_spiked_tensor, tensorize, get_proposal, log_proposal_density
+from utils import (
+    sample_sphere,
+    sample_spiked_tensor,
+    tensorize,
+    get_normal_proposal,
+    mh_step,
+    update_scaling_parameter,
+)
 
 
-def metropolis_hastings(log_scaled_posterior,
-                        starting_point,
-                        N=10000
-                        ) -> list[list, int]:
+def parallel_tempering(
+    log_posterior,
+    betas,
+    steps=10000,
+    get_proposal=get_normal_proposal,
+    burn_in_steps=1000,
+) -> list[list, int]:
     """
-    Metropolis-Hastings algorithm (Sec. 11.2; Bayesian Data Analysis; Gelman, A.)
+    Parallel Tempering algorithm
+    (cf. https://pubs.rsc.org/en/content/articlelanding/2005/cp/b509983h)
 
     Args:
-        log_scaled_posterior : Natural log of the numerator of the posterior density.
-        starting_point (np.ndarray): Starting point of the Markov chain.
-        N (int, optional): _description_. Defaults to 10000.
+        log_posterior (callable): Natural log of the posterior density.
+        betas (list): Defines the 'temperatures'.
+        steps (int, optional): Number of steps. Defaults to 10000.
+        get_proposal (callable, optional): Provides proposal states. Defaults
+                                           to get_normal_proposal.
 
     Returns:
-        list[list, int]: Sample chain, Number of accepted proposals
+        list[list, int]: Sample chain for beta=1, Number of accepted proposals.
     """
-    chain = [starting_point]
-    accepted = 0
 
-    for i in tqdm(range(N)):
-        x_old = chain[-1]
-        x_new = get_proposal(x_old)
+    # initialize chains and set starting points randomly
+    chains = {beta: [sample_sphere(n)] for beta in betas}
 
-        r = log_scaled_posterior(x_new) - \
-            log_scaled_posterior(
-                x_old)  # proposal density can be cancelled since it's symmetric in x_new, x_old
+    # define densities
+    log_posteriors = {beta: lambda x: log_posterior(x) ** beta for beta in betas}
 
-        if np.log(np.random.uniform()) < r:
-            chain.append(x_new)
-            accepted += 1
-        else:
-            chain.append(chain[-1])
+    # storage for acceptance counters
+    acceptance_counters = dict.fromkeys(betas, 0)
 
-    return chain, accepted
+    # storage for scaling parameters of proposal getters
+    scaling_parameters = dict.fromkeys(betas, 1.0)
+
+    # take steps
+    for i in tqdm(range(steps)):
+        for beta in betas:
+            x_old = chains[beta][-1]
+
+            # get new state
+            x_new, accepted = mh_step(
+                x_old,
+                log_posteriors[beta],
+                partial(get_proposal, scaling_parameter=scaling_parameters[beta]),
+            )
+
+            # update chain
+            chains[beta].append(x_new)
+            acceptance_counters[beta] += accepted
+
+            # update proposal sampler scaling every 100 steps
+            # to optimize acceptance rate
+            if 0 < i <= burn_in_steps and i % 100 == 0:
+                scaling_parameters[beta] = update_scaling_parameter(
+                    beta, acceptance_counters[beta] / 100, scaling_parameters[beta]
+                )
+                acceptance_counters[beta] = 0  # reset counter
+
+        # perform replica swaps every fifth step
+        if i % 5 == 0:
+            # randomly choose to swap replicas i and i+1 for even or odd i
+            parity = np.random.choice([0, 1])
+            # iterate over (i,i+1) pairs
+            for smaller_beta, bigger_beta in zip(
+                betas[parity::2], betas[(parity + 1) :: 2]
+            ):
+                # compute acceptance probability
+                log_acceptance_probability = (bigger_beta - smaller_beta) * (
+                    log_posterior(chains[bigger_beta][-1])
+                    - log_posterior(chains[smaller_beta][-1])
+                )
+                if np.log(np.random.uniform()) < log_acceptance_probability:
+                    # swap states i and i+1
+                    chains[smaller_beta][-1], chains[bigger_beta][-1] = (
+                        chains[bigger_beta][-1],
+                        chains[smaller_beta][-1],
+                    )
+
+    # return chain for beta=1
+    return chains[1], acceptance_counters[1]
 
 
 if __name__ == "__main__":
-    # simplefilter("ignore")
 
     # parameters
-    d = 4           # tensor order (don't change)
-    lmbda = 5       # signal-to-noise ratio
-    n = 10          # dimension
+    d = 4  # tensor order (don't change)
+    lmbda = 5  # signal-to-noise ratio
+    n = 10  # dimension
+    betas = [0.05 * i for i in range(1, 21)]
 
     x = sample_sphere(n)
     Y = sample_spiked_tensor(lmbda, x)  # Y = lambda*x^{\otimes d} + W
 
-    def log_scaled_posterior(x) -> float:
+    def log_posterior(x) -> float:
         # Y|x ~ N(lambda*x, 1/n),  x ~ U(S^{n-1})
 
-        return -n/2*norm(Y - lmbda*tensorize(x))**2
+        return -n / 2 * norm(Y - lmbda * tensorize(x)) ** 2
 
-    N = 10000       # number of steps
-    chain, accepted = metropolis_hastings(
-        log_scaled_posterior, sample_sphere(n), N)
+    steps = 10000  # number of steps
+    chain, accepted = parallel_tempering(log_posterior, betas, steps=steps)
 
-    x_hat = np.mean(chain, axis=0)  # empirical posterior mean
+    x_hat = np.mean(chain[(steps // 10) :: 2], axis=0)  # estimated posterior mean
 
     print("\n||x_hat - x||: ", norm(x_hat - x))
     print("< x_hat, x > : ", x_hat @ x)
-    print(
-        f"Acceptance rate: {int(100*accepted/N)}%")
+    print(f"Acceptance rate: {int(100 * accepted / steps)}%")

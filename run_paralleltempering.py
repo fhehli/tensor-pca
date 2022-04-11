@@ -19,7 +19,9 @@ def run_paralleltempering(
         cycle_length=cycle_length,
         betas=betas,
     )
+    print(f"Starting run of lambda={lmbda} in dim={dim}.")
     st.run_PT()
+    print(f"Finished run of lambda={lmbda} in dim={dim}.")
     estimated_spike = st.estimate
     correlation = st.correlation
     runtime = st.runtime

@@ -21,12 +21,14 @@ def run_paralleltempering(
     )
     st.run_PT()
     estimated_spike = st.estimate
+    correlation = st.correlation
     runtime = st.runtime
 
     return {
         "lambda": lmbda,
         "dim": dim,
         "estimated spike": estimated_spike,
+        "correlation": correlation,
         "runtime": runtime,
     }
 
@@ -55,7 +57,7 @@ if __name__ == "__main__":
         ],
     )
 
-    filename = "data/results" + datetime.now().strftime("_%d-%m-%Y_%H:%M") + ".pkl"
+    filename = "data/pt_results" + datetime.now().strftime("_%d-%m-%Y_%H:%M") + ".pkl"
     outfile = open(filename, "wb")
     dump(results, outfile)
     outfile.close()

@@ -57,7 +57,10 @@ class SpikedTensor:
         if store_chain:
             # prepare storage for sample chain
             self.chain = np.zeros((self.cycles, self.dim))
-        
+
+        # inner product of the spike and the estimated spike
+        self.correlation = None
+
         self.runtime = None
 
     def generate_sample(self) -> None:
@@ -154,6 +157,7 @@ class SpikedTensor:
                 self.chain[i] = self.current_states[1]
 
         self.estimate /= self.cycles
-        
+        self.correlation = self.estimate @ self.spike
+
         end = time()
         self.runtime = end - start

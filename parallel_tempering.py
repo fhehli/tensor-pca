@@ -7,7 +7,7 @@ from numpy.random import normal
 from utils import tensorize, normalise, sample_sphere, get_normal_proposal
 
 
-class SpikedTensor:
+class ParallelTempering:
     def __init__(
         self,
         lmbda,
@@ -15,7 +15,8 @@ class SpikedTensor:
         order=4,
         cycles=1_000,
         warmup_cycles=100,
-        cycle_length=100,
+        cycle_length=10,
+        warmup_cycle_length=100,
         betas=[0.05 * i for i in range(1, 21)],
         get_proposal=get_normal_proposal,
         store_chain=False,
@@ -39,6 +40,8 @@ class SpikedTensor:
 
         self.cycle_length = cycle_length
 
+        self.warmup_cycle_length = warmup_cycle_length
+
         # Inverse temperatures
         self.betas = betas
 
@@ -47,6 +50,16 @@ class SpikedTensor:
             self.seed = seed
 
         self.generate_sample()
+
+        # posterior density for beta=1
+        self.log_posterior = (
+            lambda x: -n / 2 * np.sum((self.sample - self.lmbda * tensorize(x, d)) ** 2)
+        )
+
+        # posterior densities for all temperatures
+        self.log_posteriors = {
+            beta: lambda x: self.log_posterior(x) ** beta for beta in self.betas
+        }
 
         self.get_proposal = get_proposal
 
@@ -61,6 +74,8 @@ class SpikedTensor:
         # inner product of the spike and the estimated spike
         self.correlation = None
 
+        self.acceptance_rate = 0
+
         self.runtime = None
 
     def generate_sample(self) -> None:
@@ -71,16 +86,6 @@ class SpikedTensor:
 
         # Y = lambda*x^{\otimes d} + W/sqrt{n}
         self.sample = self.lmbda * tensorize(self.spike, d) + W / np.sqrt(n)
-
-        # posterior density for beta=1
-        self.log_posterior = (
-            lambda x: -n / 2 * np.sum((self.sample - self.lmbda * tensorize(x, d)) ** 2)
-        )
-
-        # posterior densities for all temperatures
-        self.log_posteriors = {
-            beta: lambda x: self.log_posterior(x) ** beta for beta in self.betas
-        }
 
     @staticmethod
     def mh_step(x_old, log_posterior, get_proposal) -> list[np.ndarray, int]:
@@ -93,7 +98,7 @@ class SpikedTensor:
         else:
             return x_old, 0
 
-    def run_cycle(self, beta=1) -> list[np.ndarray, int]:
+    def run_cycle(self, cycle_length=10, beta=1) -> list[np.ndarray, int]:
         acceptance_rate = 0
         for _ in range(self.cycle_length):
             x_new, accepted = self.mh_step(
@@ -110,7 +115,10 @@ class SpikedTensor:
         return x_new, acceptance_rate
 
     def replica_swaps(self):
-        parity = np.random.choice([0, 1])
+        parity = np.random.choice(
+            [0, 1]
+        )  # decide to swap replica i and i+1 for even or odd i
+
         for smaller_beta, bigger_beta in zip(
             self.betas[parity::2], self.betas[(parity + 1) :: 2]
         ):
@@ -128,9 +136,11 @@ class SpikedTensor:
 
     def run_PT(self) -> list[list, float]:
         # initialize states for all temperatures
+        # this is a dict which maps beta -> current state
         self.current_states = {beta: sample_sphere(self.dim) for beta in self.betas}
 
         # storage for scaling parameters (variance) of jumping distribution
+        # this is a dict which maps beta -> scaling parameter
         self.scaling_parameters = dict.fromkeys(self.betas, 1.0)
 
         start = time()
@@ -138,18 +148,23 @@ class SpikedTensor:
         # run warmup cycles for all temperatures
         for beta in self.betas:
             for _ in range(self.warmup_cycles):
-                _, acceptance_rate = self.run_cycle(beta)
+                _, acceptance_rate = self.run_cycle(self.warmup_cycle_length, beta)
 
-                # tune acceptance rate
+                # adapt acceptance rate
                 if acceptance_rate < 0.20:
                     self.scaling_parameters[beta] *= 1.1
                 elif acceptance_rate > 0.40:
                     self.scaling_parameters[beta] *= 0.9
 
         # run cycles
+        self.acceptance_rate = 0
         for i in range(self.cycles):
             for beta in self.betas:
-                self.current_states[beta], _ = self.run_cycle(beta)
+                self.current_states[beta], accepted = self.run_cycle(
+                    self.cycle_length, beta
+                )
+                if beta == 1:
+                    self.acceptance_rate += accepted
 
             self.replica_swaps()
             self.estimate += self.current_states[1]
@@ -158,6 +173,7 @@ class SpikedTensor:
 
         self.estimate /= self.cycles
         self.correlation = self.estimate @ self.spike
+        self.acceptance_rate /= self.cycles
 
         end = time()
         self.runtime = end - start

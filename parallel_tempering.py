@@ -4,7 +4,7 @@ from time import time
 import numpy as np
 from numpy.random import normal
 
-from utils import tensorize, normalise, sample_sphere, get_normal_proposal
+from utils import tensorize, sample_sphere, get_normal_proposal
 
 
 class ParallelTempering:
@@ -102,9 +102,10 @@ class ParallelTempering:
 
     def run_cycle(self, cycle_length=10, beta=1) -> list[np.ndarray, int]:
         acceptance_rate = 0
+        x = self.current_states[beta]
         for _ in range(self.cycle_length):
-            x_new, accepted = self.mh_step(
-                self.current_states[beta],
+            x, accepted = self.mh_step(
+                x,
                 self.log_posteriors[beta],
                 partial(
                     self.get_proposal, scaling_parameter=self.scaling_parameters[beta]
@@ -114,9 +115,9 @@ class ParallelTempering:
 
         acceptance_rate /= self.cycle_length
 
-        return x_new, acceptance_rate
+        return x, acceptance_rate
 
-    def replica_swaps(self):
+    def replica_swaps(self) -> None:
         parity = np.random.choice(
             [0, 1]
         )  # decide to swap replica i and i+1 for even or odd i
@@ -155,7 +156,7 @@ class ParallelTempering:
                 # adapt acceptance rate
                 if acceptance_rate < 0.20:
                     self.scaling_parameters[beta] *= 1.1
-                elif acceptance_rate > 0.40:
+                elif acceptance_rate > 0.30:
                     self.scaling_parameters[beta] *= 0.9
 
         # run cycles

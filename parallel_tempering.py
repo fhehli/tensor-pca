@@ -53,7 +53,9 @@ class ParallelTempering:
 
         # posterior density for beta=1
         self.log_posterior = (
-            lambda x: -n / 2 * np.sum((self.sample - self.lmbda * tensorize(x, d)) ** 2)
+            lambda x: -self.dim
+            / 2
+            * np.sum((self.sample - self.lmbda * tensorize(self.dim, self.order)) ** 2)
         )
 
         # posterior densities for all temperatures

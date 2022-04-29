@@ -10,7 +10,7 @@ from parallel_tempering import ParallelTempering
 def run_paralleltempering(
     lmbda, dim, order, cycles, warmup_cycles, cycle_length, warmup_cycle_length, betas
 ):
-    st = ParallelTempering(
+    pt = ParallelTempering(
         lmbda=lmbda,
         dim=dim,
         order=order,
@@ -20,36 +20,32 @@ def run_paralleltempering(
         warmup_cycle_length=warmup_cycle_length,
         betas=betas,
     )
+    estimated_spikes, correlations, acceptance_rates = [], [], []
+    res = [lmbda, dim, estimated_spikes, correlations, acceptance_rates]
     print(f"Starting run of lambda={lmbda} in dim={dim}.")
-    st.run_PT()
-    print(f"Finished run of lambda={lmbda} in dim={dim}.")
-    estimated_spike = st.estimate
-    correlation = st.correlation
-    runtime = st.runtime
+    for i in range(repetitions):
+        pt.estimate = np.zeros(dim)
+        pt.acceptance_rate = 0
+        pt.run_PT()
+        estimated_spikes.append(pt.estimate)
+        correlations.append(pt.correlation)
+        acceptance_rates.append(pt.acceptance_rate)
 
-    return {
-        "lambda": lmbda,
-        "dim": dim,
-        "estimated spike": estimated_spike,
-        "correlation": correlation,
-        "runtime": runtime,
-    }
+    print(f"Finished run of lambda={lmbda} in dim={dim}.")
+    return res
 
 
 if __name__ == "__main__":
-    # # parameters
-    dims = [10, 20]
-    order = 4
-    asymptotic_lambdas = {n: n ** ((order - 2) / 4) for n in dims}
-    lambdas = {
-        n: np.linspace(asymptotic_lambdas[n] - 1, asymptotic_lambdas[n] + 5, 50)
-        for n in dims
-    }
-    cycles = 1_000
+    # parameters
+    dims = [25, 50]
+    order = 3
+    lambdas = np.logspace(np.log10(2), np.log10(10), 10)
+    cycles = 500
     warmup_cycles = 500
-    cycle_length = 10
+    cycle_length = 100
     warmup_cycle_length = 100
-    betas = [0.05 * i for i in range(1, 21)]
+    betas = [0.1 * i for i in range(1, 11)]
+    repetitions = 5
 
     pool = Pool()
     results = pool.starmap(
@@ -70,7 +66,7 @@ if __name__ == "__main__":
         ],
     )
 
-    filename = "data/pt_results" + datetime.now().strftime("_%d-%m-%Y_%H:%M") + ".pkl"
+    filename = f"data/corr_{datetime.now().strftime('_%d-%m-%Y_%H:%M')}.pkl"
     outfile = open(filename, "wb")
     dump(results, outfile)
     outfile.close()

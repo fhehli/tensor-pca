@@ -98,3 +98,5 @@ dmypy.json
 
 .vscode
 *.code-workspace
+
+notebooks/

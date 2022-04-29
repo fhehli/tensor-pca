@@ -26,6 +26,7 @@ def tensorize(x, d=4) -> np.ndarray:
 def normalise(x) -> np.ndarray:
     return x / norm(x)
 
+
 def sample_sphere(n) -> np.ndarray:
     """
     Get a sample drawn uniformly from the (n-1)-sphere.

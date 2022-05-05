@@ -3,7 +3,7 @@ from numpy.linalg import norm
 from numpy.random import normal
 
 
-def tensorize(x, d=4) -> np.ndarray:
+def d_fold_tensor_product(x, order=3) -> np.ndarray:
     """
     Compute d-fold tensor product of a vector.
 
@@ -13,14 +13,13 @@ def tensorize(x, d=4) -> np.ndarray:
     Returns:
         np.ndarray: d-fold tensor product of x.
     """
-    assert d > 1, "Error (in call to tensorize): Tensor order must be bigger than 1."
+    assert order > 1, "Error: Tensor order must be bigger than 1."
 
-    y = np.tensordot(x, x, axes=0)
-    while d > 2:
-        y = np.tensordot(y, x, axes=0)
-        d -= 1
+    xd = np.tensordot(x, x, axes=0)
+    for i in range(1, order - 1):
+        xd = np.tensordot(xd, x, axes=0)
 
-    return y
+    return xd
 
 
 def normalise(x) -> np.ndarray:

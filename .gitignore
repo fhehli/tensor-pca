@@ -99,4 +99,4 @@ dmypy.json
 .vscode
 *.code-workspace
 
-notebooks/
+debugging.ipynb

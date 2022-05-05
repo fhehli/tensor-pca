@@ -1,10 +1,11 @@
 from functools import partial
 from time import time
+from tqdm import tqdm
 
 import numpy as np
 from numpy.random import normal
 
-from utils import tensorize, sample_sphere, get_normal_proposal
+from utils import d_fold_tensor_product, sample_sphere, get_normal_proposal
 
 
 class ParallelTempering:
@@ -14,16 +15,17 @@ class ParallelTempering:
         dim=10,
         order=4,
         cycles=1_000,
-        warmup_cycles=100,
-        cycle_length=10,
-        warmup_cycle_length=100,
-        betas=[0.05 * i for i in range(1, 21)],
+        cycle_length=100,
+        warmup_cycles=50,
+        warmup_cycle_length=1000,
+        betas=[0.05 * i for i in range(1, 11)],
         get_proposal=get_normal_proposal,
+        verbose=False,
         store_chain=False,
         seed=False,
     ) -> None:
 
-        # Signal-to-noise ratio
+        # Signal-to-noise parameter
         self.lmbda = lmbda
 
         # Dimension
@@ -49,14 +51,9 @@ class ParallelTempering:
         if seed:
             self.seed = seed
 
-        self.generate_sample()
+        self.verbose = verbose
 
-        # posterior density for beta=1
-        self.log_posterior = (
-            lambda x: -self.dim
-            / 2
-            * np.sum((self.sample - self.lmbda * tensorize(self.dim, self.order)) ** 2)
-        )
+        self.generate_sample()
 
         # posterior densities for all temperatures
         self.log_posteriors = {
@@ -80,30 +77,88 @@ class ParallelTempering:
 
         self.runtime = None
 
+    def log_posterior(self, x) -> float:
+        """log-posterior density in the model with uniform prior on the sphere
+        and asymmetric Gaussian noise. This ignores terms constant wrt x,
+        since they are irrelevant for the MH steps/replica swaps."""
+        n, d = self.dim, self.order
+
+        # this loop computes < y, x^{\otimes d} >
+        correlation = self.sample
+        for _ in range(d):
+            correlation = correlation @ x
+
+        return n * self.lmbda * correlation
+
     def generate_sample(self) -> None:
         n, d = self.dim, self.order
 
         self.spike = sample_sphere(n)  # sampled uniformly from the sphere
-        W = normal(0, 1, d * (n,))  # gaussian noise
+        W = normal(0, 1, d * (n,))  # Gaussian noise
 
         # Y = lambda*x^{\otimes d} + W/sqrt{n}
-        self.sample = self.lmbda * tensorize(self.spike, d) + W / np.sqrt(n)
+        self.sample = self.lmbda * d_fold_tensor_product(self.spike, d) + W / np.sqrt(n)
 
-    @staticmethod
-    def mh_step(x_old, log_posterior, get_proposal) -> list[np.ndarray, int]:
-        # assumes proposal density is symmetric
+    def get_update_factor(self, acceptance_rate) -> float:
+        """Returns a factor to update the scaling parameters
+        depending on the acceptance rate."""
+        factor = 1.0
+        if acceptance_rate < 0.02:
+            factor = 1.5
+        elif 0.02 <= acceptance_rate < 0.05:
+            factor = 1.3
+        elif 0.05 <= acceptance_rate < 0.10:
+            factor = 1.2
+        elif 0.10 <= acceptance_rate < 0.15:
+            factor = 1.05
+        elif 0.35 <= acceptance_rate < 0.50:
+            factor = 0.95
+        elif 0.5 <= acceptance_rate:
+            factor = 0.8
+
+        return factor
+
+    def replica_swaps(self) -> int:
+        parity = np.random.choice([0, 1])
+        # decide to swap replica i and i+1 for even or odd i. 0 corresponds to even, 1 to odd
+
+        for smaller_beta, bigger_beta in zip(
+            self.betas[parity::2], self.betas[(parity + 1) :: 2]
+        ):
+
+            # compute acceptance probability
+            log_acceptance_probability = (bigger_beta - smaller_beta) * (
+                self.log_posterior(self.current_state[bigger_beta])
+                - self.log_posterior(self.current_state[smaller_beta])
+            )
+            if (
+                -np.random.exponential() < log_acceptance_probability
+            ):  # equivalent to np.log(np.random.uniform()) < log_acceptance_probability
+                self.total_swaps += 1
+
+                # swap states i and i+1
+                self.current_state[smaller_beta], self.current_state[bigger_beta] = (
+                    self.current_state[bigger_beta],
+                    self.current_state[smaller_beta],
+                )
+
+    def mh_step(self, x_old, log_posterior, get_proposal) -> list[np.ndarray, int]:
+        """Takes one Metropolis Hastings step. Assumes proposal density is symmetric"""
         proposal = get_proposal(x_old)
         r = log_posterior(proposal) - log_posterior(x_old)
 
-        if np.log(np.random.uniform()) < r:
+        if (
+            -np.random.exponential() < r
+        ):  # equivalent to np.log(np.random.uniform()) < r
             return proposal, 1
         else:
             return x_old, 0
 
-    def run_cycle(self, cycle_length=10, beta=1) -> list[np.ndarray, int]:
+    def run_cycle(self, cycle_length=100, beta=1) -> list[np.ndarray, int]:
+        """Takes cycle_length many Metropolis Hastings steps"""
         acceptance_rate = 0
-        x = self.current_states[beta]
-        for _ in range(self.cycle_length):
+        x = self.current_state[beta]
+        for _ in range(cycle_length):
             x, accepted = self.mh_step(
                 x,
                 self.log_posteriors[beta],
@@ -113,70 +168,98 @@ class ParallelTempering:
             )
             acceptance_rate += accepted
 
-        acceptance_rate /= self.cycle_length
+        acceptance_rate /= cycle_length
 
         return x, acceptance_rate
-
-    def replica_swaps(self) -> None:
-        parity = np.random.choice(
-            [0, 1]
-        )  # decide to swap replica i and i+1 for even or odd i
-
-        for smaller_beta, bigger_beta in zip(
-            self.betas[parity::2], self.betas[(parity + 1) :: 2]
-        ):
-            # compute acceptance probability
-            log_acceptance_probability = (bigger_beta - smaller_beta) * (
-                self.log_posterior(self.current_states[bigger_beta])
-                - self.log_posterior(self.current_states[smaller_beta])
-            )
-            if np.log(np.random.uniform()) < log_acceptance_probability:
-                # swap states i and i+1
-                self.current_states[smaller_beta], self.current_states[bigger_beta] = (
-                    self.current_states[bigger_beta],
-                    self.current_states[smaller_beta],
-                )
 
     def run_PT(self) -> list[list, float]:
         # initialize states for all temperatures
         # this is a dict which maps beta -> current state
-        self.current_states = {beta: sample_sphere(self.dim) for beta in self.betas}
+        self.current_state = {beta: sample_sphere(self.dim) for beta in self.betas}
 
         # storage for scaling parameters (variance) of jumping distribution
         # this is a dict which maps beta -> scaling parameter
         self.scaling_parameters = dict.fromkeys(self.betas, 1.0)
 
         start = time()
+        if self.verbose:
+            print(f"[lambda={self.lmbda:.1f}, dim={self.dim}] Starting warmup cycles.")
 
         # run warmup cycles for all temperatures
         for beta in self.betas:
-            for _ in range(self.warmup_cycles):
-                _, acceptance_rate = self.run_cycle(self.warmup_cycle_length, beta)
+            cycle_iterator = (
+                tqdm(
+                    range(self.warmup_cycles),
+                    desc=f"[lambda={self.lmbda:.1f}, dim={self.dim}] beta={beta:.1f} WARMUP",
+                )
+                if self.verbose
+                else range(self.cycles)
+            )
+            for i in cycle_iterator:
+                self.current_state[beta], acceptance_rate = self.run_cycle(
+                    self.warmup_cycle_length, beta
+                )
 
                 # adapt acceptance rate
-                if acceptance_rate < 0.20:
-                    self.scaling_parameters[beta] *= 1.1
-                elif acceptance_rate > 0.30:
-                    self.scaling_parameters[beta] *= 0.9
+                factor = self.get_update_factor(acceptance_rate)
+                self.scaling_parameters[beta] *= factor
 
-        # run cycles
+            if self.verbose:
+                print(
+                    f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished warmup cycles for beta={beta:.1f}. Final acceptance rate was {int(100*acceptance_rate)}%."
+                )
+
+        if self.verbose:
+            print(
+                f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished warmup. Starting sampling."
+            )
+
+        # run sampling cycles
         self.acceptance_rate = 0
-        for i in range(self.cycles):
-            for beta in self.betas:
-                self.current_states[beta], accepted = self.run_cycle(
+        self.total_swaps = 0
+
+        cycle_iter = (
+            tqdm(
+                range(
+                    1, self.cycles + 1
+                ),  # shift by one for easier online computation of acceptance rates
+                desc=f"[lambda={self.lmbda:.1f}, dim={self.dim}] SAMPLING",
+            )
+            if self.verbose
+            else range(1, self.cycles)
+        )
+
+        for i in cycle_iter:
+            for i, beta in enumerate(self.betas):
+                self.current_state[beta], acceptance_rate = self.run_cycle(
                     self.cycle_length, beta
                 )
-                if beta == 1:
-                    self.acceptance_rate += accepted
+
+                # update acceptance rate
+                if beta == 1.0:
+                    self.acceptance_rate *= i - 1
+                    self.acceptance_rate += acceptance_rate
+                    self.acceptance_rate /= i
 
             self.replica_swaps()
-            self.estimate += self.current_states[1]
+            self.estimate += self.current_state[1]  # update estimate
             if self.store_chain:
-                self.chain[i] = self.current_states[1]
+                self.chain[i] = self.current_state[1]
+
+            if self.verbose and (i + 1) % (self.cycles // 10) == 0:
+                print(
+                    f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished {i+1} cycles. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
+                )
 
         self.estimate /= self.cycles
         self.correlation = self.estimate @ self.spike
-        self.acceptance_rate /= self.cycles
 
         end = time()
         self.runtime = end - start
+
+        if self.verbose:
+            print(
+                f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished sampling. Correlation was {self.correlation:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {self.total_swaps} swaps. Runtime was {self.runtime:.0f}s."
+            )
+
+        print(f"[lambda={self.lmbda:.1f}, dim={self.dim}] Done.")

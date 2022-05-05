@@ -8,62 +8,89 @@ from parallel_tempering import ParallelTempering
 
 
 def run_paralleltempering(
-    lmbda, dim, order, cycles, warmup_cycles, cycle_length, warmup_cycle_length, betas
+    lmbda,
+    dim,
+    order,
+    cycles,
+    warmup_cycles,
+    cycle_length,
+    warmup_cycle_length,
+    betas,
+    max_lambda,
+    max_dim,
 ):
-    pt = ParallelTempering(
-        lmbda=lmbda,
-        dim=dim,
-        order=order,
-        cycles=cycles,
-        warmup_cycles=warmup_cycles,
-        cycle_length=cycle_length,
-        warmup_cycle_length=warmup_cycle_length,
-        betas=betas,
+    estimated_spikes, correlations, acceptance_rates, n_swaps = (
+        [],
+        [],
+        [],
+        [],
     )
-    estimated_spikes, correlations, acceptance_rates = [], [], []
-    res = [lmbda, dim, estimated_spikes, correlations, acceptance_rates]
-    print(f"Starting run of lambda={lmbda} in dim={dim}.")
-    for i in range(repetitions):
-        pt.estimate = np.zeros(dim)
-        pt.acceptance_rate = 0
-        pt.run_PT()
-        estimated_spikes.append(pt.estimate)
-        correlations.append(pt.correlation)
-        acceptance_rates.append(pt.acceptance_rate)
+    res = {
+        "lambda": lmbda,
+        "dim": dim,
+        "estimated_spikes": estimated_spikes,
+        "correlations": correlations,
+        "acceptance_rates": acceptance_rates,
+        "n_swaps": n_swaps,
+    }
 
-    print(f"Finished run of lambda={lmbda} in dim={dim}.")
+    for _ in range(repetitions):
+        pt = ParallelTempering(
+            lmbda=lmbda,
+            dim=dim,
+            order=order,
+            cycles=cycles,
+            warmup_cycles=warmup_cycles,
+            cycle_length=cycle_length,
+            warmup_cycle_length=warmup_cycle_length,
+            betas=betas,
+            verbose=(lmbda == max_lambda and dim == max_dim),
+        )
+        pt.run_PT()
+        res["estimated_spikes"].append(pt.estimate)
+        res["correlations"].append(pt.correlation)
+        res["acceptance_rates"].append(pt.acceptance_rate)
+        res["n_swaps"].append(pt.total_swaps)
+
     return res
 
 
 if __name__ == "__main__":
     # parameters
-    dims = [25, 50]
+    dims = [10, 25, 50]
     order = 3
-    lambdas = np.logspace(np.log10(2), np.log10(10), 10)
+    lambdas = np.logspace(np.log10(0.5), np.log10(10), 10)
     cycles = 500
-    warmup_cycles = 500
     cycle_length = 100
-    warmup_cycle_length = 100
+    warmup_cycles = 20
+    warmup_cycle_length = 1_000
     betas = [0.1 * i for i in range(1, 11)]
-    repetitions = 5
+    repetitions = 10
+
+    max_lambda = lambdas.max()
+    max_dim = dims[-1]
+
+    args = [
+        [
+            lmbda,
+            dim,
+            order,
+            cycles,
+            warmup_cycles,
+            cycle_length,
+            warmup_cycle_length,
+            betas,
+            max_lambda,
+            max_dim,
+        ]
+        for dim in dims
+        for lmbda in lambdas
+    ]
 
     pool = Pool()
     results = pool.starmap(
         run_paralleltempering,
-        [
-            [
-                lmbda,
-                dim,
-                order,
-                cycles,
-                warmup_cycles,
-                cycle_length,
-                warmup_cycle_length,
-                betas,
-            ]
-            for dim in dims
-            for lmbda in lambdas[dim]
-        ],
+        args,
     )
 
     filename = f"data/corr_{datetime.now().strftime('_%d-%m-%Y_%H:%M')}.pkl"

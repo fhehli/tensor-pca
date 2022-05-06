@@ -18,8 +18,10 @@ def run_paralleltempering(
     betas,
     max_lambda,
     max_dim,
+    repetitions,
 ):
-    estimated_spikes, correlations, acceptance_rates, n_swaps = (
+    estimated_spikes, correlations, acceptance_rates, n_swaps, runtimes = (
+        [],
         [],
         [],
         [],
@@ -32,6 +34,7 @@ def run_paralleltempering(
         "correlations": correlations,
         "acceptance_rates": acceptance_rates,
         "n_swaps": n_swaps,
+        "runtimes": runtimes,
     }
 
     for _ in range(repetitions):
@@ -48,16 +51,17 @@ def run_paralleltempering(
         )
         pt.run_PT()
         res["estimated_spikes"].append(pt.estimate)
-        res["correlations"].append(pt.correlation)
+        res["correlations"].append(pt.correlations)
         res["acceptance_rates"].append(pt.acceptance_rate)
         res["n_swaps"].append(pt.total_swaps)
+        res["runtimes"].append(pt.runtime)
 
     return res
 
 
 if __name__ == "__main__":
     # parameters
-    dims = [10, 25, 50]
+    dims = [100]
     order = 3
     lambdas = np.logspace(np.log10(0.5), np.log10(10), 10)
     cycles = 500
@@ -82,6 +86,7 @@ if __name__ == "__main__":
             betas,
             max_lambda,
             max_dim,
+            repetitions,
         ]
         for dim in dims
         for lmbda in lambdas

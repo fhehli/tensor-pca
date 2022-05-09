@@ -1,4 +1,3 @@
-from functools import partial
 from time import perf_counter
 from tqdm import tqdm
 
@@ -55,16 +54,26 @@ class ParallelTempering:
 
         self.get_proposal = get_proposal
 
+        # storage for scaling parameters (variance) of jumping distribution
+        # this is a dict which maps beta -> scaling parameter
+        self.scaling_parameters = dict.fromkeys(self.betas, 1.0)
+
         # estimated spike (mean)
         self.estimate = np.zeros(self.dim)
+
+        # initialize states for all temperatures
+        # this is a dict which maps beta -> current state
+        self.current_state = {beta: sample_sphere(self.dim) for beta in self.betas}
 
         self.store_chain = store_chain
         if store_chain:
             # prepare storage for sample chain
             self.chain = np.zeros((self.cycles, self.dim))
+            self.chain[0] = self.current_state[1]
 
         # inner products of the spike and the estimated spikes, updated after each cycle
         self.correlations = np.zeros(self.cycles + 1)
+        self.correlations[0] = self.current_state[1] @ self.spike
 
         # the acceptance rate of the chain with beta=1 over all sampling steps
         self.acceptance_rate = 0
@@ -166,17 +175,6 @@ class ParallelTempering:
     def run_PT(self) -> None:
         start_time = perf_counter()
 
-        # initialize states for all temperatures
-        # this is a dict which maps beta -> current state
-        self.current_state = {beta: sample_sphere(self.dim) for beta in self.betas}
-
-        # initial correlation
-        self.correlations[0] = self.current_state[1] @ self.spike
-
-        # storage for scaling parameters (variance) of jumping distribution
-        # this is a dict which maps beta -> scaling parameter
-        self.scaling_parameters = dict.fromkeys(self.betas, 1.0)
-
         if self.verbose:
             print(f"[lambda={self.lmbda:.1f}, dim={self.dim}] Starting warmup cycles.")
 
@@ -221,7 +219,7 @@ class ParallelTempering:
                 desc=f"[lambda={self.lmbda:.1f}, dim={self.dim}] SAMPLING",
             )
             if self.verbose
-            else range(1, self.cycles)
+            else range(1, self.cycles + 1)
         )
 
         for i in cycle_iter:
@@ -249,7 +247,7 @@ class ParallelTempering:
 
             if self.verbose and ((i + 1) % (self.cycles // 10) == 0):
                 print(
-                    f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished {i+1} cycles. Current correlation is {self.correlations[i]}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
+                    f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished {i+1} cycles. Current correlation is {self.correlations[i]:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
                 )
 
         end_time = perf_counter()
@@ -259,5 +257,3 @@ class ParallelTempering:
             print(
                 f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {self.total_swaps} swaps. Runtime was {self.runtime:.0f}s."
             )
-
-        print(f"[lambda={self.lmbda:.1f}, dim={self.dim}] Done.")

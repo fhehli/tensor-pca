@@ -56,15 +56,17 @@ def run_paralleltempering(
         res["n_swaps"].append(pt.total_swaps)
         res["runtimes"].append(pt.runtime)
 
+    print(f"[lambda={lmbda:.2f}, dim={dim}] Done.")
+
     return res
 
 
 if __name__ == "__main__":
     # parameters
-    dims = [100]
+    dims = [10, 25, 50, 75]
     order = 3
     lambdas = np.logspace(np.log10(0.5), np.log10(10), 10)
-    cycles = 500
+    cycles = 200
     cycle_length = 100
     warmup_cycles = 20
     warmup_cycle_length = 1_000
@@ -72,7 +74,7 @@ if __name__ == "__main__":
     repetitions = 10
 
     max_lambda = lambdas.max()
-    max_dim = dims[-1]
+    max_dim = max(dims)
 
     args = [
         [

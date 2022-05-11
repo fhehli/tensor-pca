@@ -16,6 +16,8 @@ def run_paralleltempering(
     cycle_length,
     warmup_cycle_length,
     betas,
+    tol,
+    tol_window,
     max_lambda,
     max_dim,
     repetitions,
@@ -39,6 +41,7 @@ def run_paralleltempering(
 
     for _ in range(repetitions):
         pt = ParallelTempering(
+            log_posterior=log_posterior,
             lmbda=lmbda,
             dim=dim,
             order=order,
@@ -47,6 +50,8 @@ def run_paralleltempering(
             cycle_length=cycle_length,
             warmup_cycle_length=warmup_cycle_length,
             betas=betas,
+            tol=tol,
+            tol_window=tol_window,
             verbose=(lmbda == max_lambda and dim == max_dim),
         )
         pt.run_PT()
@@ -62,15 +67,34 @@ def run_paralleltempering(
 
 
 if __name__ == "__main__":
-    # parameters
-    dims = [10, 25, 50, 75]
-    order = 3
-    lambdas = np.logspace(np.log10(0.5), np.log10(10), 10)
+
+    def log_posterior(x, Y, lmbda, dim) -> float:
+        """log-posterior density in the model with uniform prior on the sphere
+        and asymmetric Gaussian noise. This ignores terms constant wrt x,
+        since they are irrelevant for the Metropolis steps/replica swaps."""
+
+        # Correlation is < y, x^{\otimes d} >.
+        correlation = Y
+        for _ in Y.shape:
+            correlation = correlation @ x
+
+        return dim * lmbda * correlation
+
+    # Parameters
+    dims = [10, 50, 100, 500]
+    order = 2
+    lambdas = np.logspace(np.log10(0.01), np.log10(10), 12)
     cycles = 200
     cycle_length = 100
     warmup_cycles = 20
     warmup_cycle_length = 1_000
-    betas = [0.1 * i for i in range(1, 11)]
+    swap_frequency = 1  # replica swaps every .. cycles
+    n_betas = 10
+    betas = [round(i / n_betas, 2) for i in range(1, n_betas + 1)]
+    tol = 5e-3
+    tol_window = (
+        20  # how long correlation has to stay inside a 2*tol interval before we stop
+    )
     repetitions = 10
 
     max_lambda = lambdas.max()
@@ -86,6 +110,8 @@ if __name__ == "__main__":
             cycle_length,
             warmup_cycle_length,
             betas,
+            tol,
+            tol_window,
             max_lambda,
             max_dim,
             repetitions,
@@ -100,7 +126,14 @@ if __name__ == "__main__":
         args,
     )
 
-    filename = f"data/corr_{datetime.now().strftime('_%d-%m-%Y_%H:%M')}.pkl"
-    outfile = open(filename, "wb")
+    time = datetime.now().strftime("%d-%m-%Y_%H:%M")
+
+    args_filename = f"data/args/{time}.pkl"
+    outfile = open(args_filename, "wb")
+    dump(results, outfile)
+    outfile.close()
+
+    results_filename = f"data/corr_{time}.pkl"
+    outfile = open(results_filename, "wb")
     dump(results, outfile)
     outfile.close()

@@ -3,7 +3,7 @@ from numpy.linalg import norm
 from numpy.random import normal
 
 
-def d_fold_tensor_product(x, order=3) -> np.ndarray:
+def d_fold_tensor_product(x, order=4) -> np.ndarray:
     """
     Compute d-fold tensor product of a vector.
 
@@ -16,7 +16,7 @@ def d_fold_tensor_product(x, order=3) -> np.ndarray:
     assert order > 1, "Error: Tensor order must be bigger than 1."
 
     xd = np.tensordot(x, x, axes=0)
-    for i in range(1, order - 1):
+    for _ in range(1, order - 1):
         xd = np.tensordot(xd, x, axes=0)
 
     return xd

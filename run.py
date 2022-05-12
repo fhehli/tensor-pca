@@ -81,8 +81,8 @@ if __name__ == "__main__":
         return dim * lmbda * correlation
 
     # Parameters
-    dims = [10, 50, 100, 500]
-    order = 2
+    dims = [10, 25, 50]
+    order = 4
     lambdas = np.logspace(np.log10(0.01), np.log10(10), 12)
     cycles = 200
     cycle_length = 100

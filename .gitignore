@@ -99,4 +99,4 @@ dmypy.json
 .vscode
 *.code-workspace
 
-debugging.ipynb
+scratch.ipynb

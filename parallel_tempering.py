@@ -71,9 +71,9 @@ class ParallelTempering(SpikedTensor):
         # Log posterior density
         self.log_posterior = partial(
             log_posterior,
-            Y=self.sample,
-            lmbda=lmbda,
-            dim=dim,
+            self.sample,
+            lmbda,
+            dim,
         )
 
         # Proposal sampler
@@ -123,8 +123,7 @@ class ParallelTempering(SpikedTensor):
             self.chain[0] = self.current_state[1]
 
         # Inner products of the spike and the estimated spikes, updated after each cycle
-        self.correlations = np.zeros(self.cycles + 1)
-        self.correlations[0] = self.current_state[1] @ self.spike
+        self.correlations = np.zeros(self.cycles)
 
     def get_update_factor(self, acceptance_rate) -> float:
         """Returns a factor to update the scaling parameters
@@ -303,51 +302,3 @@ class ParallelTempering(SpikedTensor):
             print(
                 f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {self.total_swaps} swaps. Runtime was {self.runtime:.0f}s."
             )
-
-
-if __name__ == "__main__":
-
-    def log_posterior(x, Y, lmbda, dim) -> float:
-        """log-posterior density in the model with uniform prior on the sphere
-        and asymmetric Gaussian noise. This ignores terms constant wrt x,
-        since they are irrelevant for the Metropolis steps/replica swaps."""
-
-        # Correlation is < y, x^{\otimes d} >.
-        correlation = Y
-        for _ in Y.shape:
-            correlation = correlation @ x
-
-        return dim * lmbda * correlation
-
-    # Parameters
-    dims = [10, 50, 100, 500]
-    order = 2
-    lambdas = np.logspace(np.log10(0.01), np.log10(10), 12)
-    cycles = 200
-    cycle_length = 100
-    warmup_cycles = 20
-    warmup_cycle_length = 1_000
-    swap_frequency = 5  # replica swaps every .. cycles
-    n_betas = 1
-    betas = [round(i / n_betas, 2) for i in range(1, n_betas + 1)]
-    tol = 5e-3
-    tol_window = (
-        100  # how long correlation has to stay inside a 2*tol interval before we stop
-    )
-    repetitions = 10
-
-    pt = ParallelTempering(
-        log_posterior=log_posterior,
-        lmbda=lambdas[1],
-        dim=dims[-1],
-        order=order,
-        cycles=cycles,
-        warmup_cycles=warmup_cycles,
-        cycle_length=cycle_length,
-        warmup_cycle_length=warmup_cycle_length,
-        betas=betas,
-        tol=tol,
-        tol_window=tol_window,
-        verbose=True,
-    )
-    pt.run_PT()

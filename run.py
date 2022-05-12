@@ -68,7 +68,7 @@ def run_paralleltempering(
 
 if __name__ == "__main__":
 
-    def log_posterior(x, Y, lmbda, dim) -> float:
+    def log_posterior(Y, lmbda, dim, x) -> float:
         """log-posterior density in the model with uniform prior on the sphere
         and asymmetric Gaussian noise. This ignores terms constant wrt x,
         since they are irrelevant for the Metropolis steps/replica swaps."""
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     betas = [round(i / n_betas, 2) for i in range(1, n_betas + 1)]
     tol = 5e-3
     tol_window = (
-        20  # how long correlation has to stay inside a 2*tol interval before we stop
+        5  # how long correlation has to stay inside a 2*tol interval before we stop
     )
     repetitions = 10
 
@@ -130,7 +130,7 @@ if __name__ == "__main__":
 
     args_filename = f"data/args/{time}.pkl"
     outfile = open(args_filename, "wb")
-    dump(results, outfile)
+    dump(args, outfile)
     outfile.close()
 
     results_filename = f"data/corr_{time}.pkl"

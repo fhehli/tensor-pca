@@ -1,9 +1,9 @@
-import numpy as np
-from numpy.linalg import norm
-from numpy.random import normal
+import jax.numpy as np
+from jax.numpy.linalg import norm
+from jax.random import normal
 
 
-def d_fold_tensor_product(x, order=4) -> np.ndarray:
+def d_fold_tensor_product(x, order=4) -> np.DeviceArray:
     """
     Compute d-fold tensor product of a vector.
 
@@ -22,11 +22,7 @@ def d_fold_tensor_product(x, order=4) -> np.ndarray:
     return xd
 
 
-def normalise(x) -> np.ndarray:
-    return x / norm(x)
-
-
-def sample_sphere(n) -> np.ndarray:
+def sample_sphere(key, n) -> np.DeviceArray:
     """
     Get a sample drawn uniformly from the (n-1)-sphere.
     Args:
@@ -34,29 +30,12 @@ def sample_sphere(n) -> np.ndarray:
     Returns:
         np.ndarray: Sample.
     """
-    x = normal(0, 1, n)
+    x = normal(key, shape=(n,))
 
     return x / norm(x)
 
 
-def log_proposal_density(x_new, x_old) -> float:
-    """
-    Evaluate the natural log of the (numerator of the)
-    density of the proposal distribution.
-
-    Args:
-        x_new (np.ndarray): Proposal vector.
-        x_old (np.ndarray): Current vector.
-
-    Returns:
-        float: Value at x_new given x_old.
-    """
-    n = len(x_old)
-
-    return -n / 2 * sum((x_new - x_old) ** 2)
-
-
-def get_normal_proposal(x_old, scaling_parameter=1) -> np.ndarray:
+def get_normal_proposal(key, x_old, scaling_parameter=1) -> np.DeviceArray:
     """
     Sample a vector from a normal distribution centered at the
     current position of the Markov chain.
@@ -68,6 +47,6 @@ def get_normal_proposal(x_old, scaling_parameter=1) -> np.ndarray:
         np.ndarray: Sample.
     """
     n = len(x_old)
-    x = normal(x_old, (1 / n) ** scaling_parameter)
+    x = x_old + (1 / n) ** scaling_parameter * normal(key, x_old.shape)
 
     return x / norm(x)

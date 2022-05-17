@@ -1,11 +1,10 @@
 from time import perf_counter
+
+import jax.numpy as np
+from jax.random import choice, exponential, normal, split, PRNGKey
 from tqdm import tqdm
-from functools import partial
 
-import numpy as np
-from numpy.random import normal
-
-from utils import d_fold_tensor_product, sample_sphere, get_normal_proposal
+from utils import d_fold_tensor_product, get_normal_proposal, sample_sphere
 
 
 class SpikedTensor:
@@ -14,7 +13,7 @@ class SpikedTensor:
         lmbda,
         dim,
         order=4,
-        seed=None,
+        seed=0,
     ) -> None:
 
         # Signal-to-noise parameter
@@ -27,54 +26,58 @@ class SpikedTensor:
         self.order = order
 
         # Fix random seed
-        if seed is not None:
-            np.random.seed(seed)
+        key = PRNGKey(seed)
 
-        # generate a sample
-        self.spike, self.sample = SpikedTensor.generate_sample(
-            self.lmbda, self.dim, self.order
+        # Generate a sample
+        self.spike, self.Y = SpikedTensor.generate_sample(
+            key, self.lmbda, self.dim, self.order
         )
 
     @staticmethod
-    def generate_sample(lmbda, n, d) -> None:
+    def generate_sample(
+        key, lmbda, n, d
+    ) -> list[np.DeviceArray, np.DeviceArray, np.DeviceArray]:
         """Generates a sample of the form Y = lambda*x^{\otimes d} + W/sqrt(n)"""
-        spike = sample_sphere(n)  # sampled uniformly from the sphere
-        W = normal(0, 1, d * (n,))  # iid standard normal noise
-        sample = lmbda * d_fold_tensor_product(spike, d) + W / np.sqrt(n)
+        key, subkey = split(key)
+        spike = sample_sphere(subkey, n)  # sampled uniformly from the sphere
+        key, subkey = split(key)
+        W = normal(subkey, d * (n,))  # iid standard normal noise
+        Y = lmbda * d_fold_tensor_product(spike, d) + W / np.sqrt(n)
 
-        return spike, sample
+        return key, spike, Y
 
 
-class ParallelTempering(SpikedTensor):
+class ParallelTempering:
     def __init__(
         self,
         log_posterior,
-        lmbda,
+        spike,
+        Y,
         dim,
+        lmbda,
+        key,
         order=4,
         cycles=1_000,
         cycle_length=100,
         warmup_cycles=50,
         warmup_cycle_length=1000,
-        betas=[0.05 * i for i in range(1, 11)],
+        n_betas=10,
         swap_frequency=1,
         get_proposal=get_normal_proposal,
         tol=5e-3,
-        tol_window=20,
+        tol_window=10,
         verbose=False,
         store_chain=False,
-        seed=None,
     ) -> None:
+        self.log_posterior = log_posterior
+        self.spike = spike
+        self.Y = Y
+        self.dim = dim
+        self.lmbda = lmbda
+        self.key = key
 
-        super().__init__(lmbda, dim, order, seed)
-
-        # Log posterior density
-        self.log_posterior = partial(
-            log_posterior,
-            self.sample,
-            lmbda,
-            dim,
-        )
+        # Tensor order.
+        self.order = order
 
         # Proposal sampler
         self.get_proposal = get_proposal
@@ -88,9 +91,10 @@ class ParallelTempering(SpikedTensor):
         self.warmup_cycle_length = warmup_cycle_length
 
         # Inverse temperatures
-        self.betas = betas
+        self.n_betas = n_betas
+        self.betas = [round(i / n_betas, 2) for i in range(1, n_betas + 1)]
 
-        # How frequently to perform replica swaps
+        # How frequently to attempt replica swaps
         self.swap_frequency = swap_frequency
 
         # Stopping tolerance
@@ -98,6 +102,8 @@ class ParallelTempering(SpikedTensor):
         self.tol_window = tol_window
 
         self.verbose = verbose
+        if verbose:
+            self.verb_prefix = f"[lambda={lmbda:.1f}, dim={self.dim}]"
         self.store_chain = store_chain
 
         # The acceptance rate of the chain with beta=1 over all sampling steps
@@ -115,7 +121,11 @@ class ParallelTempering(SpikedTensor):
 
         # Initialize states for all temperatures
         # This is a dict which maps beta -> current state
-        self.current_state = {beta: sample_sphere(self.dim) for beta in self.betas}
+        self.key, *subkeys = split(self.key, n_betas + 1)
+        self.current_state = {
+            beta: sample_sphere(subkey, self.dim)
+            for subkey, beta in zip(subkeys, self.betas)
+        }
 
         if store_chain:
             # Prepare storage for sample chain
@@ -124,6 +134,13 @@ class ParallelTempering(SpikedTensor):
 
         # Inner products of the spike and the estimated spikes, updated after each cycle
         self.correlations = np.zeros(self.cycles)
+
+        # We store for each temperature and each replica swap whether it swapped
+        # with the above (+1) or below chain (-1). If no swap happened for temper-
+        # ature beta in replica swap i, then we set it to zero.
+        self.swap_history = dict.fromkeys(
+            self.betas, np.zeros(self.cycles // swap_frequency)
+        )
 
     def get_update_factor(self, acceptance_rate) -> float:
         """Returns a factor to update the scaling parameters
@@ -149,156 +166,175 @@ class ParallelTempering(SpikedTensor):
 
         return factor
 
-    def replica_swaps(self) -> None:
+    def replica_swaps(self, key, i) -> None:
         # Decide to swap replica i and i+1 for even or odd i:
         # parity=0 corresponds to even, parity=1 to odd
-        parity = np.random.choice([0, 1])
+        key, subkey = split(key)
+        parity = choice(subkey, 2)
 
         for smaller_beta, bigger_beta in zip(
             self.betas[parity::2], self.betas[(parity + 1) :: 2]
         ):
             # (log) acceptance probability
-            r = (bigger_beta - smaller_beta) * (
-                self.log_posterior(self.current_state[bigger_beta])
-                - self.log_posterior(self.current_state[smaller_beta])
+            r = (smaller_beta - bigger_beta) * (
+                self.log_posterior(self.current_state[bigger_beta], self.Y)
+                - self.log_posterior(self.current_state[smaller_beta], self.Y)
             )
 
-            # Equivalent to np.log(np.random.uniform()) < r.
-            if 0 < r or -np.random.exponential() < r:
-                self.total_swaps += 1
-                # Swap states i and i+1.
+            # Equivalent to np.random.uniform() < exp(r).
+            if -exponential(key) < r:
+                # Swap states.
                 self.current_state[smaller_beta], self.current_state[bigger_beta] = (
                     self.current_state[bigger_beta],
                     self.current_state[smaller_beta],
                 )
+                # Record swap.
+                self.swap_history[smaller_beta] = (
+                    self.swap_history[smaller_beta].at[i].set(1)
+                )
+                self.swap_history[bigger_beta] = (
+                    self.swap_history[bigger_beta].at[i].set(-1)
+                )
 
-    def mh_step(self, x_old, beta=1) -> list[np.ndarray, int]:
+    def mh_step(self, key, x_old, beta) -> list[np.DeviceArray, int]:
         """Takes one Metropolis step. Assumes proposal density is symmetric."""
-        proposal = self.get_proposal(x_old, self.scaling_parameters[beta])
-        r = beta * (self.log_posterior(proposal) - self.log_posterior(x_old))
+        key, subkey = split(key)
+        proposal = self.get_proposal(subkey, x_old, self.scaling_parameters[beta])
+        r = beta * (
+            self.log_posterior(proposal, self.Y) - self.log_posterior(x_old, self.Y)
+        )
 
-        # Equivalent to np.log(np.random.uniform()) < r.
-        if 0 < r or -np.random.exponential() < r:
+        # Equivalent to np.random.uniform() < exp(r).
+        if -exponential(key) < r:
             return proposal, 1
         else:
             return x_old, 0
 
-    def run_cycle(self, cycle_length=100, beta=1) -> list[np.ndarray, int]:
+    def run_cycle(
+        self, key, cycle_length=1_000, beta=1
+    ) -> list[np.DeviceArray, np.DeviceArray, int]:
         """Takes cycle_length many Metropolis steps.
 
         Returns new state and acceptance rate."""
         n_accepted = 0
         x = self.current_state[beta]
         for _ in range(cycle_length):
-            x, accepted = self.mh_step(x, beta)
+            key, subkey = split(key)
+            x, accepted = self.mh_step(subkey, x, beta)
             n_accepted += accepted
 
         return x, n_accepted / cycle_length
 
-    def run_PT(self) -> None:
-        start_time = perf_counter()
-
-        if self.verbose:
-            print(f"[lambda={self.lmbda:.1f}, dim={self.dim}] Starting warmup cycles.")
-
-        # Warmup cycles for all temperatures.
-        for beta in self.betas:
-            # Define an iterator with progress bar if in verbose mode.
-            cycle_iterator = (
-                tqdm(
-                    range(self.warmup_cycles),
-                    desc=f"[lambda={self.lmbda:.1f}, dim={self.dim}] beta={beta:.2f} WARMUP",
-                )
-                if self.verbose
-                else range(self.cycles)
+    def warmup(self, beta) -> float:
+        """Runs warmup cycles for one temperature."""
+        iterator = (
+            tqdm(
+                range(self.warmup_cycles),
+                desc=f"{self.verb_prefix} beta={beta:.2f} WARMUP",
             )
-            # Run cycles
-            for i in cycle_iterator:
-                self.current_state[beta], acceptance_rate = self.run_cycle(
-                    self.warmup_cycle_length, beta
-                )
+            if self.verbose
+            else range(self.warmup_cycles)
+        )
 
-                # Update scaling to optimize acceptance rate.
-                factor = self.get_update_factor(acceptance_rate)
-                self.scaling_parameters[beta] *= factor
+        for _ in iterator:
+            self.key, subkey = split(self.key)
+            self.current_state[beta], acceptance_rate = self.run_cycle(
+                subkey,
+                self.warmup_cycle_length,
+                beta,
+            )
 
-            if self.verbose:
-                print(
-                    f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished warmup cycles for beta={beta:.2f}. Final acceptance rate was {int(100*acceptance_rate)}%."
-                )
+            # Update scaling of proposal distribution to improve acceptance rate.
+            factor = self.get_update_factor(acceptance_rate)
+            self.scaling_parameters[beta] *= factor
 
         if self.verbose:
             print(
-                f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished warmup. Starting sampling."
+                f"{self.verb_prefix} Finished warmup cycles for beta={beta:.2f}. Final acceptance rate was {int(100*acceptance_rate)}%."
             )
 
+        return self.scaling_parameters[beta]
+
+    def run_PT(self) -> None:
+        start_time = perf_counter()
+        if self.verbose:
+            print(f"{self.verb_prefix} Starting warmup cycles.")
+
+        # Warmup cycles for all temperatures.
+        for beta in self.betas:
+            self.warmup(beta)
+
         ## SAMPLING ##
+        if self.verbose:
+            print(f"{self.verb_prefix} Finished warmup. Starting sampling.")
         self.acceptance_rate = 0
-        self.total_swaps = 0
 
         # Define an iterator with progress bar if in verbose mode.
-        # Shifted by one for easier online computation of acceptance rates
-        cycle_iter = (
+        cycle_iterator = (
             tqdm(
                 range(1, self.cycles + 1),
-                desc=f"[lambda={self.lmbda:.1f}, dim={self.dim}] SAMPLING",
+                desc=f"{self.verb_prefix} SAMPLING",
             )
             if self.verbose
             else range(1, self.cycles + 1)
         )
-
         # Run cycles.
-        for i in cycle_iter:
+        for i in cycle_iterator:
             for beta in self.betas:
+                self.key, subkey = split(self.key)
                 self.current_state[beta], acceptance_rate = self.run_cycle(
-                    self.cycle_length, beta
+                    subkey, self.cycle_length, beta
                 )
 
-            # Update acceptance rate (for beta=1).
+            # Update acceptance rate for beta=1.
             self.acceptance_rate *= i - 1
             self.acceptance_rate += acceptance_rate
             self.acceptance_rate /= i
 
-            if (i + 1) % self.swap_frequency == 0:
-                self.replica_swaps()
+            # Update states and perform replica swaps.
+            if i % self.swap_frequency == 0:
+                self.key, subkey = split(self.key)
+                self.replica_swaps(subkey, i)
 
-            if self.store_chain:
-                self.chain[i] = self.current_state[1]
-
-            # Update estimated spike.
+            # Update estimated spike, correlations and save sample.
             self.estimate *= i
             self.estimate += self.current_state[1]
             self.estimate /= i + 1
-
-            self.correlations[i] = self.estimate @ self.spike
+            correlation = self.estimate @ self.spike
+            self.correlations = self.correlations.at[i - 1].set(correlation)
+            if self.store_chain:
+                self.chain = self.chain.at[i - 1].set(self.current_state[1])
 
             # Check "convergence":
-            # We check whether the correlation of the last n samples
-            # lies within an interval of size 2*self.tol, where n = self.tol_window.
-            if i + 1 >= self.tol_window and np.alltrue(
+            # We check whether the correlation of the last n samples lies
+            # within an interval of size 2*self.tol, where n = self.tol_window.
+            if i >= self.tol_window and np.alltrue(
                 np.abs(
-                    self.correlations[i - self.tol_window + 1 : i + 1]
-                    - self.correlations[i - self.tol_window + 1 : i + 1].mean()
+                    self.correlations[i - self.tol_window : i]
+                    - self.correlations[i - self.tol_window : i].mean()
                 )
                 < self.tol
             ):
                 if self.verbose:
                     print(
-                        f"[lambda={self.lmbda:.1f}, dim={self.dim}] Correlation has converged after {i} cycles."
+                        f"{self.verb_prefix} Correlation has converged after {i} cycles."
                     )
                 # Omit non-measured correlations.
                 self.correlations = self.correlations[:i]
-                break  # Stop sampling.
+                self.swap_history = {
+                    beta: self.swap_history[beta][:i] for beta in self.betas
+                }
+                break  # Stop sampling loop.
 
-            if self.verbose and ((i + 1) % (self.cycles // 10) == 0):
+            # Print message every other cycle.
+            if self.verbose and (i % (self.cycles // 10) == 0):
                 print(
-                    f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished {i+1} cycles. Current correlation is {self.correlations[i]:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
+                    f"{self.verb_prefix} Finished {i} cycles. Current correlation is {correlation:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
                 )
 
         end_time = perf_counter()
         self.runtime = end_time - start_time
-
         if self.verbose:
             print(
-                f"[lambda={self.lmbda:.1f}, dim={self.dim}] Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {self.total_swaps} swaps. Runtime was {self.runtime:.0f}s."
+                f"{self.verb_prefix} Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {np.abs(self.swap_history[1]).sum()} swaps. Runtime was {self.runtime:.0f}s."
             )

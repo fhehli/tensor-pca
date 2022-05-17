@@ -8,10 +8,10 @@ def d_fold_tensor_product(x, order=4) -> np.DeviceArray:
     Compute d-fold tensor product of a vector.
 
     Args:
-        x (np.ndarray): Vector
+        x (np.DeviceArray): Vector
         d (int): Order of tensor product
     Returns:
-        np.ndarray: d-fold tensor product of x.
+        np.DeviceArray: d-fold tensor product of x.
     """
     assert order > 1, "Error: Tensor order must be bigger than 1."
 
@@ -25,10 +25,11 @@ def d_fold_tensor_product(x, order=4) -> np.DeviceArray:
 def sample_sphere(key, n) -> np.DeviceArray:
     """
     Get a sample drawn uniformly from the (n-1)-sphere.
+
     Args:
         n (int): Dimension.
     Returns:
-        np.ndarray: Sample.
+        np.DeviceArray: Sample.
     """
     x = normal(key, shape=(n,))
 
@@ -38,13 +39,13 @@ def sample_sphere(key, n) -> np.DeviceArray:
 def get_normal_proposal(key, x_old, scaling_parameter=1) -> np.DeviceArray:
     """
     Sample a vector from a normal distribution centered at the
-    current position of the Markov chain.
+    current position of the Markov chain, and normalize.
 
     Args:
-        x_old (np.ndarray): Current vector.
+        x_old (np.DeviceArray): Current vector.
 
     Returns:
-        np.ndarray: Sample.
+        np.DeviceArray: Sample.
     """
     n = len(x_old)
     x = x_old + (1 / n) ** scaling_parameter * normal(key, x_old.shape)

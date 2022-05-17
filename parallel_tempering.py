@@ -41,8 +41,8 @@ class SpikedTensor:
         key, subkey = split(key)
         spike = sample_sphere(subkey, n)  # sampled uniformly from the sphere
         key, subkey = split(key)
-        Y = normal(subkey, d * (n,))  # iid standard normal noise
-        Y = lmbda * d_fold_tensor_product(spike, d) + Y / np.sqrt(n)
+        W = normal(subkey, d * (n,))  # iid standard normal noise
+        Y = lmbda * d_fold_tensor_product(spike, d) + W / np.sqrt(n)
 
         return key, spike, Y
 
@@ -65,7 +65,7 @@ class ParallelTempering:
         swap_frequency=1,
         get_proposal=get_normal_proposal,
         tol=5e-3,
-        tol_window=20,
+        tol_window=10,
         verbose=False,
         store_chain=False,
     ) -> None:
@@ -94,7 +94,7 @@ class ParallelTempering:
         self.n_betas = n_betas
         self.betas = [round(i / n_betas, 2) for i in range(1, n_betas + 1)]
 
-        # How frequently to perform replica swaps
+        # How frequently to attempt replica swaps
         self.swap_frequency = swap_frequency
 
         # Stopping tolerance
@@ -135,6 +135,13 @@ class ParallelTempering:
         # Inner products of the spike and the estimated spikes, updated after each cycle
         self.correlations = np.zeros(self.cycles)
 
+        # We store for each temperature and each replica swap whether it swapped
+        # with the above (+1) or below chain (-1). If no swap happened for temper-
+        # ature beta in replica swap i, then we set it to zero.
+        self.swap_history = dict.fromkeys(
+            self.betas, np.zeros(self.cycles // swap_frequency)
+        )
+
     def get_update_factor(self, acceptance_rate) -> float:
         """Returns a factor to update the scaling parameters
         depending on the acceptance rate. We aim for an acceptance
@@ -159,7 +166,7 @@ class ParallelTempering:
 
         return factor
 
-    def replica_swaps(self, key) -> None:
+    def replica_swaps(self, key, i) -> None:
         # Decide to swap replica i and i+1 for even or odd i:
         # parity=0 corresponds to even, parity=1 to odd
         key, subkey = split(key)
@@ -176,11 +183,17 @@ class ParallelTempering:
 
             # Equivalent to np.random.uniform() < exp(r).
             if -exponential(key) < r:
-                self.total_swaps += 1
-                # Swap states i and i+1.
+                # Swap states.
                 self.current_state[smaller_beta], self.current_state[bigger_beta] = (
                     self.current_state[bigger_beta],
                     self.current_state[smaller_beta],
+                )
+                # Record swap.
+                self.swap_history[smaller_beta] = (
+                    self.swap_history[smaller_beta].at[i].set(1)
+                )
+                self.swap_history[bigger_beta] = (
+                    self.swap_history[bigger_beta].at[i].set(-1)
                 )
 
     def mh_step(self, key, x_old, beta) -> list[np.DeviceArray, int]:
@@ -211,9 +224,6 @@ class ParallelTempering:
             n_accepted += accepted
 
         return x, n_accepted / cycle_length
-
-    def run_sampling_cycle(self, key, beta) -> list[np.DeviceArray, int]:
-        return self.run_cycle(key, self.current_state[beta], self.cycle_length, beta)
 
     def warmup(self, beta) -> float:
         """Runs warmup cycles for one temperature."""
@@ -258,7 +268,6 @@ class ParallelTempering:
         if self.verbose:
             print(f"{self.verb_prefix} Finished warmup. Starting sampling.")
         self.acceptance_rate = 0
-        self.total_swaps = 0
 
         # Define an iterator with progress bar if in verbose mode.
         cycle_iterator = (
@@ -285,24 +294,24 @@ class ParallelTempering:
             # Update states and perform replica swaps.
             if i % self.swap_frequency == 0:
                 self.key, subkey = split(self.key)
-                self.replica_swaps(subkey)
+                self.replica_swaps(subkey, i)
 
             # Update estimated spike, correlations and save sample.
             self.estimate *= i
             self.estimate += self.current_state[1]
             self.estimate /= i + 1
             correlation = self.estimate @ self.spike
-            self.correlations.at[i - 1].set(correlation)
+            self.correlations = self.correlations.at[i - 1].set(correlation)
             if self.store_chain:
-                self.chain.at[i - 1].set(self.current_state[1])
+                self.chain = self.chain.at[i - 1].set(self.current_state[1])
 
             # Check "convergence":
             # We check whether the correlation of the last n samples lies
             # within an interval of size 2*self.tol, where n = self.tol_window.
             if i >= self.tol_window and np.alltrue(
                 np.abs(
-                    self.correlations[i - self.tol_window : i + 1]
-                    - self.correlations[i - self.tol_window : i + 1].mean()
+                    self.correlations[i - self.tol_window : i]
+                    - self.correlations[i - self.tol_window : i].mean()
                 )
                 < self.tol
             ):
@@ -312,17 +321,20 @@ class ParallelTempering:
                     )
                 # Omit non-measured correlations.
                 self.correlations = self.correlations[:i]
-                break  # Stop sampling.
+                self.swap_history = {
+                    beta: self.swap_history[beta][:i] for beta in self.betas
+                }
+                break  # Stop sampling loop.
 
             # Print message every other cycle.
             if self.verbose and (i % (self.cycles // 10) == 0):
                 print(
-                    f"{self.verb_prefix} Finished {i+1} cycles. Current correlation is {correlation:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
+                    f"{self.verb_prefix} Finished {i} cycles. Current correlation is {correlation:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
                 )
 
         end_time = perf_counter()
         self.runtime = end_time - start_time
         if self.verbose:
             print(
-                f"{self.verb_prefix} Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {self.total_swaps} swaps. Runtime was {self.runtime:.0f}s."
+                f"{self.verb_prefix} Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {np.abs(self.swap_history[1]).sum()} swaps. Runtime was {self.runtime:.0f}s."
             )

@@ -100,3 +100,4 @@ dmypy.json
 *.code-workspace
 
 scratch.ipynb
+config.py

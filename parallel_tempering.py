@@ -144,7 +144,7 @@ class ParallelTempering:
             self.betas, np.zeros(self.cycles // swap_frequency)
         )
 
-    def get_update_factor(self, acceptance_rate) -> float:
+    def _get_update_factor(self, acceptance_rate) -> float:
         """Returns a factor to update the scaling parameters
         depending on the acceptance rate. We aim for an acceptance
         rate between 20% and 30%."""
@@ -168,7 +168,7 @@ class ParallelTempering:
 
         return factor
 
-    def replica_swaps(self, key, i) -> None:
+    def _replica_swaps(self, key, i) -> None:
         # Decide to swap replica i and i+1 for even or odd i:
         # parity=0 corresponds to even, parity=1 to odd.
         key, subkey = random.split(key)
@@ -198,7 +198,7 @@ class ParallelTempering:
                     self.swap_history[bigger_beta].at[i].set(-1)
                 )
 
-    def mh_step(self, key, x_old, beta) -> tuple[np.DeviceArray, int]:
+    def _mh_step(self, key, x_old, beta) -> tuple[np.DeviceArray, int]:
         """Takes one Metropolis step. Assumes proposal density is symmetric."""
         key, subkey = random.split(key)
         proposal = self.get_proposal(subkey, x_old, self.scaling_parameters[beta])
@@ -212,18 +212,18 @@ class ParallelTempering:
         else:
             return x_old, 0
 
-    def run_cycle(self, key, cycle_length, beta) -> tuple[np.DeviceArray, float]:
+    def _run_cycle(self, key, cycle_length, beta) -> tuple[np.DeviceArray, float]:
         """Takes cycle_length many Metropolis steps."""
         n_accepted = 0
         x = self.current_state[beta]
         for _ in range(cycle_length):
             key, subkey = random.split(key)
-            x, accepted = self.mh_step(subkey, x, beta)
+            x, accepted = self._mh_step(subkey, x, beta)
             n_accepted += accepted
 
         return x, n_accepted / cycle_length
 
-    def warmup(self, beta) -> float:
+    def _warmup(self, beta) -> float:
         """Runs warmup cycles for one temperature."""
         n_cycles = (
             tqdm(
@@ -236,14 +236,14 @@ class ParallelTempering:
 
         for _ in n_cycles:
             self.key, subkey = random.split(self.key)
-            self.current_state[beta], acceptance_rate = self.run_cycle(
+            self.current_state[beta], acceptance_rate = self._run_cycle(
                 subkey,
                 self.warmup_cycle_length,
                 beta,
             )
 
             # Update scaling of proposal distribution to improve acceptance rate.
-            factor = self.get_update_factor(acceptance_rate)
+            factor = self._get_update_factor(acceptance_rate)
             self.scaling_parameters[beta] *= factor
 
         if self.verbose:
@@ -261,7 +261,7 @@ class ParallelTempering:
         # Warmup cycles for all temperatures.
         # Could be run concurrently.
         for beta in self.betas:
-            self.warmup(beta)
+            self._warmup(beta)
 
         ## SAMPLING ##
         if self.verbose:
@@ -280,7 +280,7 @@ class ParallelTempering:
             # Run cycles.
             for beta in self.betas:
                 self.key, subkey = random.split(self.key)
-                self.current_state[beta], acceptance_rate = self.run_cycle(
+                self.current_state[beta], acceptance_rate = self._run_cycle(
                     subkey, self.cycle_length, beta
                 )
 
@@ -291,7 +291,7 @@ class ParallelTempering:
             # Update states and perform replica swaps.
             if i % self.swap_frequency == 0:
                 self.key, subkey = random.split(self.key)
-                self.replica_swaps(subkey, i)
+                self._replica_swaps(subkey, i)
 
             # Update estimated spike, correlations and save sample.
             self.estimate *= i

@@ -102,3 +102,6 @@ dmypy.json
 scratch.ipynb
 config.py
 data/
+logs/
+main_dim.py
+main_lambda.py

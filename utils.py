@@ -2,8 +2,7 @@ import jax.numpy as np
 from jax.numpy.linalg import norm
 from jax.random import normal
 
-
-def d_fold_tensor_product(x, order=4) -> np.DeviceArray:
+def d_fold_tensor_product(x, d=4) -> np.DeviceArray:
     """
     Compute d-fold tensor product of a vector.
 
@@ -13,10 +12,10 @@ def d_fold_tensor_product(x, order=4) -> np.DeviceArray:
     Returns:
         np.DeviceArray: d-fold tensor product of x.
     """
-    assert order > 1, "Error: Tensor order must be bigger than 1."
+    assert d > 1, "Error: Tensor order must be bigger than 1."
 
     xd = np.tensordot(x, x, axes=0)
-    for _ in range(1, order - 1):
+    for _ in range(1, d - 1):
         xd = np.tensordot(xd, x, axes=0)
 
     return xd

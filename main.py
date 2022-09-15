@@ -13,7 +13,7 @@ from jax import jit
 from jax.random import PRNGKey
 from knockknock import telegram_sender
 
-from config import api_token
+from config import api_token, chat_id
 from parallel_tempering import ParallelTempering, SpikedTensor
 
 DEFAULTS = {
@@ -84,7 +84,7 @@ def run_paralleltempering(kwargs, seeds) -> dict:
     return res
 
 
-@telegram_sender(token=api_token, chat_id=1533966132)
+@telegram_sender(token=api_token, chat_id=chat_id)
 def main(kwargs, mode) -> None:
     # Run.
     results = list()

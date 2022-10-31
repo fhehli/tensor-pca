@@ -14,7 +14,8 @@ from jax.random import PRNGKey
 from knockknock import telegram_sender
 
 from config import api_token, chat_id
-from parallel_tempering import ParallelTempering, SpikedTensor
+from spiked_tensor import SpikedTensor
+from parallel_tempering import ParallelTempering
 
 DEFAULTS = {
     "m": "dim",
@@ -50,21 +51,25 @@ def run_paralleltempering(kwargs, seeds) -> dict:
         key = PRNGKey(seed)
         key, spike, Y = SpikedTensor.generate_sample(key, lmbda, dim, order)
 
-        # Even though Y is constant, we pass it as a parameter in order to avoid
-        # "constant folding", which causes unnecessary memory use in this case.
+        # Defines log-posterior density of the model with uniform prior on the
+        # sphere and asymmetric Gaussian noise. This ignores terms constant wrt
+        # x, since they are irrelevant for the Metropolis steps/replica swaps.
+        # The log-posterior is n*lambda*<x^{\otimes d}, Y>.  Even though Y is
+        # constant, we pass it as a parameter in order to avoid "constant
+        # folding", which causes unnecessary memory use in this case.
         # See https://github.com/google/jax/issues/10596#issuecomment-1119703839.
-        @jit
-        def log_posterior(x, Y_) -> float:
-            """Log-posterior density of the model with uniform prior on the sphere
-            and asymmetric Gaussian noise. This ignores terms constant wrt x,
-            since they are irrelevant for the Metropolis steps/replica swaps."""
-
-            # Correlation is < x^{\otimes d}, y >.
-            correlation = Y_
-            for _ in Y_.shape:
-                correlation = correlation @ x
-
-            return dim * lmbda * correlation
+        assert order in [
+            2,
+            3,
+            4,
+        ], f"Only tensor order 2, 3 and 4 are supported. You tried order={order}."
+        if order == 2:
+            log_posterior = lambda x, Y_: dim * lmbda * Y_ @ x @ x
+        elif order == 3:
+            log_posterior = lambda x, Y_: dim * lmbda * Y_ @ x @ x @ x
+        elif order == 4:
+            log_posterior = lambda x, Y_: dim * lmbda * Y_ @ x @ x @ x @ x
+        log_posterior = jit(log_posterior)
 
         pt = ParallelTempering(
             log_posterior=log_posterior,
@@ -73,7 +78,7 @@ def run_paralleltempering(kwargs, seeds) -> dict:
             key=key,
             **kwargs,
         )
-        pt.run_PT()
+        pt.run()
         res["spikes"].append(spike)
         res["estimated_spikes"].append(pt.estimate)
         res["correlations"].append(pt.correlations)

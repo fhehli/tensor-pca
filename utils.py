@@ -2,6 +2,7 @@ import jax.numpy as np
 from jax.numpy.linalg import norm
 from jax.random import normal
 
+
 def d_fold_tensor_product(x, d=4) -> np.DeviceArray:
     """
     Compute d-fold tensor product of a vector.

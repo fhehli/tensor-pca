@@ -13,7 +13,7 @@ from jax import jit
 from jax.random import PRNGKey
 from knockknock import telegram_sender
 
-from config import api_token, chat_id
+from config import api_token, chat_id #Antoine: this import is not resolved for me. Is it one of your config giles?
 from spiked_tensor import SpikedTensor
 from parallel_tempering import ParallelTempering
 
@@ -58,6 +58,8 @@ def run_paralleltempering(kwargs, seeds) -> dict:
         # constant, we pass it as a parameter in order to avoid "constant
         # folding", which causes unnecessary memory use in this case.
         # See https://github.com/google/jax/issues/10596#issuecomment-1119703839.
+
+        #Antoine (remark for myself): The model is Y = lambda*x^{\otimes d} + W/sqrt(n), so indeed this is the correct posterior
         assert order in [
             2,
             3,
@@ -135,7 +137,7 @@ if __name__ == "__main__":
         choices={"dim", "lambda"},
         default=DEFAULTS["m"],
         help="Mode. Mode 'dim' gathers measurements for dim-running time plots, \
-        mode 'lamdbda' for lambda-running time plots. Default: dim",
+        mode 'lambda' for lambda-running time plots. Default: dim",
         required=True,
     )
     parser.add_argument(

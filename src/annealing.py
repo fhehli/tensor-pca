@@ -52,7 +52,12 @@ class SimulatedAnnealing:
     def _temperature_scheduler(self, n) -> float:
         """Returns temperature depending on number of iteration using
         an exponential cooling schedule."""
-        temperature = self.initial_temperature * self.cooling_rate**n
+        temperature = self.initial_temperature * self.cooling_rate**n 
+        """
+        Antoine: I think that e.g. in https://arxiv.org/pdf/2206.04760.pdf they use a linear cooling schedule (cf second column of page 4).
+        We could compare the two, my fear is that an exponential schedule will lead to too fast cooling, even more if you don't do a full cycle at each decrease 
+        of temperature (cf below).
+        """
         return temperature
 
     def _step(self, key, x_old, T) -> tuple[np.DeviceArray, int]:
@@ -68,6 +73,12 @@ class SimulatedAnnealing:
         else:
             return x_old, 0
 
+    """
+    Antoine: If you look at usual SA algorithms (like in https://arxiv.org/pdf/2206.04760.pdf), after a decrease of temperature, 
+    they do a ``Monte Carlo Sweep'', that is they change every variable in a model with discrete variables: I think here this corresponds to do a full MC cycle rather than 
+    just a single step after changing the temperature! The idea of SA is to equilibrate at each intermediate temperature, so when we go to T - dT
+    we hope to have equilibrated at T already.
+    """
     def run(self) -> None:
         n_steps = tqdm(range(self.n_steps)) if self.verbose else range(self.n_steps)
         for n in n_steps:

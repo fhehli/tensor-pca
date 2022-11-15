@@ -50,4 +50,9 @@ def get_normal_proposal(key, x_old, scaling_parameter=1) -> np.DeviceArray:
     n = len(x_old)
     x = x_old + (1 / n) ** scaling_parameter * normal(key, x_old.shape)
 
+    """
+    Antoine: I guess one should explain that with scaling_parameter = 1, this typically means ||x - x_old||_2 ~ 1/sqrt(n), which is akin to what happens 
+    if x_i = +- 1 /sqrt(n), and we change a single coordinate in a proposal.
+    Am I correct in saying that this is the reason for chosing this scaling ?
+    """
     return x / norm(x)

@@ -7,6 +7,10 @@ from tqdm import tqdm
 
 from utils import get_normal_proposal, sample_sphere
 
+"""
+Antoine: Some comments I made on the metropolis.py file are also valid here
+"""
+
 
 class ParallelTempering:
     """

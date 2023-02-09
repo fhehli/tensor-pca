@@ -1,4 +1,8 @@
 from time import perf_counter
+from pathlib import Path
+import logging
+import logging.config
+from rich.logging import RichHandler
 
 import jax.numpy as np
 from jax.numpy.linalg import norm
@@ -7,9 +11,11 @@ from tqdm import tqdm
 
 from utils import get_normal_proposal, sample_sphere
 
-"""
-Antoine: Some comments I made on the metropolis.py file are also valid here
-"""
+# Use config file to initialize logger
+CONFIG_DIR = "./config"
+logging.config.fileConfig(Path(CONFIG_DIR, "logging.config"))
+logger = logging.getLogger()
+logger.handlers[0] = RichHandler(markup=True)
 
 
 class ParallelTempering:
@@ -72,7 +78,7 @@ class ParallelTempering:
 
         self.verbose = verbose
         if verbose:
-            self.verb_prefix = f"[lambda={lmbda:.1f}, dim={self.dim}]"
+            self.info_prefix = f"[lambda={lmbda:.1f}, dim={self.dim}]"
         self.store_chain = store_chain
 
         # The acceptance rate of the chain with beta=1 over all sampling steps.
@@ -114,7 +120,7 @@ class ParallelTempering:
             self.betas, np.zeros(self.max_cycles // swap_frequency)
         )
 
-    def _get_update_factor(acceptance_rate) -> float:
+    def _get_update_factor(self, acceptance_rate) -> float:
         """Returns a factor to update the scaling parameters of
         the proposal distribution. We aim for an acceptance rate
         between 20% and 30%."""
@@ -198,7 +204,7 @@ class ParallelTempering:
         n_cycles = (
             tqdm(
                 range(self.warmup_cycles),
-                desc=f"{self.verb_prefix} beta={beta:.2f} WARMUP",
+                desc=f"{self.info_prefix} beta={beta:.2f} WARMUP",
             )
             if self.verbose
             else range(self.warmup_cycles)
@@ -217,14 +223,14 @@ class ParallelTempering:
             self.scaling_parameters[beta] *= factor
 
         if self.verbose:
-            print(
-                f"{self.verb_prefix} Finished warmup cycles for beta={beta:.2f}. Final acceptance rate was {int(100*acceptance_rate)}%."
+            logger.info(
+                f"{self.info_prefix} Finished warmup cycles for beta={beta:.2f}. Final acceptance rate was {int(100*acceptance_rate)}%."
             )
 
     def run(self) -> None:
         start_time = perf_counter()
         if self.verbose:
-            print(f"{self.verb_prefix} Starting warmup cycles.")
+            logger.info(f"{self.info_prefix} Starting warmup cycles.")
 
         # Warmup cycles for all temperatures.
         # Could be run concurrently.
@@ -233,13 +239,13 @@ class ParallelTempering:
 
         ## SAMPLING ##
         if self.verbose:
-            print(f"{self.verb_prefix} Finished warmup. Starting sampling.")
+            logger.info(f"{self.info_prefix} Finished warmup. Starting sampling.")
 
         # Define an iterator with progress bar if in verbose mode.
         n_cycles = (
             tqdm(
                 range(1, self.max_cycles + 1),
-                desc=f"{self.verb_prefix} SAMPLING",
+                desc=f"{self.info_prefix} SAMPLING",
             )
             if self.verbose
             else range(1, self.max_cycles + 1)
@@ -261,7 +267,8 @@ class ParallelTempering:
                 self.key, subkey = random.split(self.key)
                 self._replica_swaps(subkey, i)
 
-            # Update estimated spike, correlations and save sample.
+            # Update estimated spike. Remember that we take
+            # as our estimator the (normalized) mean of the samples.
             self.estimate *= i
             self.estimate += self.current_state[1]
             self.estimate /= i + 1
@@ -283,8 +290,8 @@ class ParallelTempering:
                 < self.tol
             ):
                 if self.verbose:
-                    print(
-                        f"{self.verb_prefix} Correlation has converged after {i} cycles."
+                    logger.info(
+                        f"{self.info_prefix} Correlation has converged after {i} cycles."
                     )
                 # Omit non-measured correlations.
                 self.correlations = self.correlations[:i]
@@ -295,12 +302,12 @@ class ParallelTempering:
 
             # Print message every other cycle.
             if self.verbose and (i % (self.max_cycles // 10) == 0):
-                print(
-                    f"{self.verb_prefix} Finished {i} cycles. Current correlation is {correlation:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
+                logger.info(
+                    f"{self.info_prefix} Finished {i} cycles. Current correlation is {correlation:.2f}. Acceptance rate so far is {int(100*self.acceptance_rate)}%."
                 )
 
         self.runtime = perf_counter() - start_time
         if self.verbose:
-            print(
-                f"{self.verb_prefix} Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {np.abs(self.swap_history[1]).sum()} swaps. Runtime was {self.runtime:.0f}s."
+            logger.info(
+                f"{self.info_prefix} Finished sampling. Correlation was {self.correlations[-1]:.2f}. Final acceptance rate was {int(100*self.acceptance_rate)}%. There were {np.abs(self.swap_history[1]).sum()} swaps. Runtime was {self.runtime:.0f}s."
             )

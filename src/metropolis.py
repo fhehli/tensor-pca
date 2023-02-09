@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from utils import get_normal_proposal, sample_sphere
 
+
 class Metropolis:
     """
     Implementation of Metropolis MCMC for the spiked tensor problem.
@@ -193,11 +194,8 @@ class Metropolis:
             self.acceptance_rate_history.append(acceptance_rate)
             self.acceptance_rate = np.mean(np.array(self.acceptance_rate_history))
 
-            # Update estimated spike, correlations and save sample.
-            """
-            Antoine: Write that we take the mean as estimator, we could also e.g. take the last sample, here the mean is more coherent choice 
-            since we want to compute the posterior average.
-            """
+            # Update estimated spike. Remember that we take
+            # as our estimator the (normalized) mean of the samples.
             self.estimate *= i
             self.estimate += self.current_state
             self.estimate /= i + 1

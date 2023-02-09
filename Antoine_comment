@@ -1,1 +1,0 @@
-- In general, I think it's better to use screen to run scripts, especially if very long: this way you can monitor them even when disconnecting/reconnecting to the client. See https://blogs.ethz.ch/isgdmath/screen/

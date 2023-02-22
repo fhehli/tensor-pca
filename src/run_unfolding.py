@@ -9,7 +9,6 @@ from datetime import datetime
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import numpy as np
-from jax import jit
 from jax.random import PRNGKey
 
 # from knockknock import telegram_sender
